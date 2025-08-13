@@ -9,14 +9,19 @@ IFS=$'\n\t'
 # -------------------------------------------------------------------------
 # Helper functions
 # -------------------------------------------------------------------------
-log()    { echo -e "\e[1;34m>> $*\e[0m"; }
-error()  { echo -e "\e[1;31m!! $*\e[0m" >&2; }
-die()    { error "$*"; exit 1; }
+log() { echo -e "\e[1;34m>> $*\e[0m"; }
+error() { echo -e "\e[1;31m!! $*\e[0m" >&2; }
+die() {
+  error "$*"
+  exit 1
+}
 
 # -------------------------------------------------------------------------
-# 1️⃣  Write the custom makepkg.conf to /etc/makepkg.conf
+# 1️⃣  Write the custom /etc/makepkg.conf (the exact file you supplied)
 # -------------------------------------------------------------------------
-MAKEPKG_CONF='#!/hint/bash
+log "Writing custom /etc/makepkg.conf"
+sudo bash -c "cat > /etc/makepkg.conf <<'EOF'
+#!/hint/bash
 # shellcheck disable=2034
 
 #
@@ -33,7 +38,6 @@ DLAGENTS=('file::/usr/bin/curl -qgC - -o %o %u'
           'https::/usr/bin/curl -qgb \"\" -fLC - --retry 3 --retry-delay 3 -o %o %u'
           'rsync::/usr/bin/rsync --no-motd -z %u %o'
           'scp::/usr/bin/scp -C %u %o')
-
 #-- VCS clients
 VCSCLIENTS=('bzr::breezy'
             'fossil::fossil'
@@ -47,139 +51,112 @@ VCSCLIENTS=('bzr::breezy'
 CARCH="x86_64"
 CHOST="x86_64-pc-linux-gnu"
 PACKAGECARCH="x86_64"
-
 CFLAGS="-march=native -O3 -pipe -fno-plt -fexceptions \
-        -Wp,-D_FORTIFY_SOURCE=3 -Wformat -Werror=format-security \
-        -fstack-clash-protection -fcf-protection"
-CXXFLAGS="$CFLAGS -Wp,-D_GLIBCXX_ASSERTIONS"
-LDFLAGS="-Wl,-O1 -Wl,--sort-common -Wl,--as-needed -Wl,-z,relro -Wl,-z,now \
-         -Wl,-z,pack-relative-relocs"
-LTOFLAGS="-flto=auto"
-MAKEFLAGS="-j$(nproc)"
-NINJAFLAGS="-j$(nproc)"
+  -Wp,-D_FORTIFY_SOURCE=3 -Wformat -Werror=format-security \
+  -fstack-clash-protection -fcf-protection"
+CXXFLAGS="\$CFLAGS -Wp,-D_GLIBCXX_ASSERTIONS"
+LDFLAGS="-Wl,-O1 -Wl,--as-needed -Wl,-z,relro -Wl,-z,now"
+MAKEFLAGS="-j\$\(nproc\)"
+NINJAFLAGS="-j\$\(nproc\)"
 DEBUG_CFLAGS="-g"
-DEBUG_CXXFLAGS="$DEBUG_CFLAGS"
+DEBUG_CXXFLAGS="\$DEBUG_CFLAGS"
 
-#########################################################################
 # BUILD ENVIRONMENT
-#########################################################################
 BUILDENV=(!distcc color !ccache check !sign)
 
-#########################################################################
 # GLOBAL PACKAGE OPTIONS
-#########################################################################
-OPTIONS=(strip docs !libtool !staticlibs emptydirs zipman purge !debug lto !autodeps)
+OPTIONS=(strip !libtool !staticlibs emptydirs zipman purge !debug lto !autodeps)
 
-#########################################################################
-# GLOBAL PACKAGE FLAGS
-#########################################################################
+# GLOBAL FLAGS
 INTEGRITY_CHECK=(sha256)
 STRIP_BINARIES="--strip-all"
 STRIP_SHARED="--strip-unneeded"
-STRIP_STATIC="--strip-debug"
-MAN_DIRS=({usr{,/local}{,/share},opt/*}/{man,info})
-DOC_DIRS=(usr/{,local/}{,share/}{doc,gtk-doc} opt/*/{doc,gtk-doc})
-PURGE_TARGETS=(usr/{,share}/info/dir .packlist *.pod)
-DBGSRCDIR="/usr/src/debug"
-LIB_DIRS=('lib:usr/lib' 'lib32:usr/lib32')
 
-#########################################################################
-# PACKAGE OUTPUT
-#########################################################################
+# PKG EXTENSIONS
 PKGEXT=".pkg.tar.zst"
 SRCEXT=".src.tar.gz"
-
-#########################################################################
-# OTHER
-#########################################################################
-#PACMAN_AUTH=()
 # vim: set ft=sh ts=2 sw=2 et:
-'
-
-log "Writing custom /etc/makepkg.conf"
-sudo bash -c "cat > /etc/makepkg.conf <<'EOF'
-$MAKEPKG_CONF
 EOF"
 log "/etc/makepkg.conf written"
 
 # -------------------------------------------------------------------------
-# 2️⃣  Install build prerequisites (git, base-devel) – needed for AUR builds
+# 2️⃣  Install build prerequisites (git + base-devel)
 # -------------------------------------------------------------------------
 log "Ensuring git and base-devel are installed"
 sudo pacman -Sy --needed --noconfirm git base-devel
 
 # -------------------------------------------------------------------------
-# 3️⃣  Install paru (AUR helper) manually
+# 3️⃣  Install the AUR helper *paru* (manual git + makepkg)
 # -------------------------------------------------------------------------
 if ! command -v paru &>/dev/null; then
-    log "Installing paru from AUR (manual git + makepkg)"
-    TMPDIR=$(mktemp -d)
-    git clone https://aur.archlinux.org/paru.git "$TMPDIR/paru"
-    (cd "$TMPDIR/paru" && makepkg -si --noconfirm)
-    rm -rf "$TMPDIR"
-    log "paru installed"
+  log "Installing paru (AUR helper) from the AUR"
+  TMPDIR=$(mktemp -d)
+  git clone https://aur.archlinux.org/paru.git "$TMPDIR/paru"
+  (cd "$TMPDIR/paru" && makepkg -si --noconfirm)
+  rm -rf "$TMPDIR"
+  log "paru installed"
 else
-    log "paru already present"
+  log "paru already installed"
 fi
 
 # -------------------------------------------------------------------------
-# 4️⃣  Official repo packages (one per line, no comments)
+# 4️⃣  Install official repository packages (one per line, no comments)
 # -------------------------------------------------------------------------
 OFFICIAL_PKGS=(
-hyprland
-hyprpaper
-hypridle
-hyprlock
-gtk4-layer-shell
-kvantum
-kvantum-qt5
-adw-gtk-theme
-kitty
-neovim
-pipewire
-pipewire-pulse
-wireplumber
-blueberry
-grim
-slurp
-xdg-desktop-portal-hyprland
-xdg-utils
-jq
-btop
-chromium
+  hyprland
+  hyprpaper
+  hypridle
+  hyprlock
+  gtk4-layer-shell
+  kvantum
+  kvantum-qt5
+  adw-gtk-theme
+  kitty
+  neovim
+  pipewire
+  pipewire-pulse
+  wireplumber
+  blueberry
+  grim
+  slurp
+  xdg-desktop-portal-hyprland
+  xdg-utils
+  jq
+  btop
+  chromium
 )
 
 log "Installing official repository packages"
 sudo pacman -S --needed --noconfirm "${OFFICIAL_PKGS[@]}"
 
 # -------------------------------------------------------------------------
-# 5️⃣  AUR packages (one per line, no comments)
+# 5️⃣  Install AUR packages (one per line, no comments)
 # -------------------------------------------------------------------------
 AUR_PKGS=(
-quickshell
-nerd-fonts-sf-mono
-matugen-bin
-vimix-icon-theme-git
+  quickshell
+  nerd-fonts-sf-mono
+  matugen-bin
+  vimix-icon-theme-git
 )
 
 log "Installing AUR packages via paru"
 paru -S --needed --noconfirm "${AUR_PKGS[@]}"
 
 # -------------------------------------------------------------------------
-# 6️⃣  Disable NetworkManager, enable systemd‑networkd (already part of systemd)
+# 6️⃣  Disable NetworkManager, enable systemd‑networkd (part of systemd)
 # -------------------------------------------------------------------------
-#log "Disabling NetworkManager if it exists"
-#sudo systemctl stop NetworkManager.service 2>/dev/null || true
-#sudo systemctl disable NetworkManager.service 2>/dev/null || true
-#sudo systemctl mask NetworkManager.service 2>/dev/null || true
-#systemctl --user mask NetworkManager.service 2>/dev/null || true
+log "Disabling NetworkManager (if present)"
+sudo systemctl stop NetworkManager.service 2>/dev/null || true
+sudo systemctl disable NetworkManager.service 2>/dev/null || true
+sudo systemctl mask NetworkManager.service 2>/dev/null || true
+systemctl --user mask NetworkManager.service 2>/dev/null || true
 
-#log "Enabling systemd‑networkd"
-#sudo systemctl enable --now systemd-networkd.service
-#sudo systemctl enable --now systemd-networkd-wait-online.service
+log "Enabling systemd‑networkd"
+sudo systemctl enable --now systemd-networkd.service
+sudo systemctl enable --now systemd-networkd-wait-online.service
 
 # -------------------------------------------------------------------------
-# 7️⃣  Directory layout under $HOME/.config
+# 7️⃣  Create $HOME/.config hierarchy
 # -------------------------------------------------------------------------
 BASE="$HOME/.config"
 log "Creating configuration directories under $BASE"
@@ -190,49 +167,44 @@ mkdir -p "$BASE/systemd/user"
 mkdir -p "$BASE/ai"
 
 # -------------------------------------------------------------------------
-# Helper to write files (overwrites only with --force)
+# Helper to write files safely (writes raw text, sets mode 644)
 # -------------------------------------------------------------------------
 FORCE_OVERWRITE=0
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --force) FORCE_OVERWRITE=1; shift ;;
-        -h|--help)
-            cat <<EOF
+while (("$#")); do
+  case "$1" in
+  --force)
+    FORCE_OVERWRITE=1
+    shift
+    ;;
+  -h | --help)
+    cat <<EOF
 Usage: $0 [--force]
 
-  --force    Overwrite existing configuration files.
+  --force   Overwrite existing files
 EOF
-            exit 0 ;;
-        *) die "Unknown argument: $1" ;;
-    esac
+    exit 0
+    ;;
+  *) break ;;
+  esac
 done
 
-# The following `write_file` implementation streams the literal text to
-# `install`, avoiding any accidental evaluation.  This mirrors the safe‑write
-# patterns recommended in script‑rewriting guides such as
-# [scriptshadow.net][], [scriptreaderpro.com][], and [bluecatscreenplay.com][].
 write_file() {
-    local dst=$1
-    local content=$2
-
-    if [[ -e "$dst" && $FORCE_OVERWRITE -eq 0 ]]; then
-        log "Skipping existing file $dst (use --force to overwrite)"
-        return
-    fi
-
-    # Ensure target directory exists
-    install -d "$(dirname "$dst")"
-
-    # Write the raw content (no variable expansion) and set mode 644 atomically
-    printf '%s' "$content" | install -Dm644 /dev/stdin "$dst"
-
-    log "Wrote $dst"
+  local dst=$1
+  shift
+  if [[ -e "$dst" && $FORCE_OVERWRITE -eq 0 ]]; then
+    log "Skipping $dst (use --force to overwrite)"
+    return
+  fi
+  install -d "$(dirname "$dst")"
+  # $* contains the full heredoc, so we use a temporary heredoc
+  cat "$@" | install -Dm644 /dev/stdin "$dst"
+  log "Wrote $dst"
 }
 
 # -------------------------------------------------------------------------
-# 8️⃣  Hyprland configuration (full, exact copy)
+# 8️⃣  Hyprland configuration (exact copy, plain‑text labels, no Unicode)
 # -------------------------------------------------------------------------
-HYPR_CONF='
+write_file "$BASE/hypr/hyprland.conf" - <<'EOF'
 # General appearance – flat, fast, no rounded corners
 general {
     border_size = 2
@@ -244,7 +216,7 @@ general {
     resize_on_border = true
 }
 
-# Animation – snappy 150 ms
+# Animation – snappy 150 ms
 animation {
     enabled = true
     duration = 150
@@ -255,7 +227,7 @@ decoration {
     rounding = 0
 }
 
-# INPUT – disable mouse acceleration (Hyprland native)
+# INPUT – disable mouse acceleration (native Hyprland)
 input {
     kb_layout = us
     repeat_rate = 25
@@ -273,7 +245,7 @@ exec-once = dbus-launch --exit-with-session hypridle
 exec-once = dbus-launch --exit-with-session hyprlock
 exec-once = dbus-launch --exit-with-session blueberry-tray
 
-# Monitors (2 × 1440p @ 165 Hz)
+# Monitors (2 × 1440p @ 165 Hz)
 monitor = DP-1,2560x1440@165,0x0,1
 monitor = DP-2,2560x1440@165,2560x0,1
 
@@ -289,7 +261,7 @@ workspace = 8, name:8
 workspace = 9, name:9
 workspace = 10, name:10
 
-# Keybindings
+# Keybindings (Super = $mod)
 $mod = SUPER
 
 # Core apps
@@ -317,65 +289,62 @@ bind = $mod+SHIFT, 1, movetoworkspace, 1
 
 # Screenshots
 bind = $mod, PRINT, exec, $HOME/.config/scripts/screenshot.sh full
-bind = $mod+SHIFT, PRINT, exec, $HOME/.config/scripts/screenshot.sh area
-bind = $mod+CTRL, PRINT, exec, $HOME/.config/scripts/screenshot.sh window
-bind = $mod+ALT, PRINT, exec, $HOME/.config/scripts/screenshot.sh monitor
+bind = $mod+SHIFT, PRINT, exec, $HOME/.scripts/screenshot.sh area
+bind = $mod+CTRL, PRINT, exec, $HOME/.scripts/screenshot.sh window
+bind = $mod+ALT, PRINT, exec, $HOME/.scripts/screenshot.sh monitor
 
 # Wallpaper navigation
-bind = $mod, RIGHT, exec, $HOME/.config/scripts/wallpaper_next.sh
-bind = $mod, LEFT,  exec, $HOME/.config/scripts/wallpaper_prev.sh
-bind = $mod, UP,    exec, $HOME/.config/scripts/wallpaper_random.sh
+bind = $mod, RIGHT, exec, $HOME/.scripts/wallpaper_next.sh
+bind = $mod, LEFT, exec, $HOME/.scripts/wallpaper_prev.sh
+bind = $mod, UP, exec, $HOME/.scripts/wallpaper_random.sh
 
 # Quickshell UI toggles
-bind = $mod, SPACE, exec, $HOME/.config/scripts/show-launcher.sh
-bind = $mod, W, exec, $HOME/.config/scripts/show-wallpaper-selector.sh
-bind = $mod, I, exec, $HOME/.config/scripts/show-ai-sidebar.sh
+bind = $mod, SPACE, exec, $HOME/.scripts/show-launcher.sh
+bind = $mod, W, exec, $HOME/.scripts/show-wallpaper-selector.sh
+bind = $mod, I, exec, $HOME/.scripts/show-ai-sidebar.sh
 
 # Reload Quickshell UI (SIGUSR1)
 bind = $mod, R, exec, kill -SIGUSR1 quickshell
 
-# System‑key OSDs (volume / brightness)
-bind = , XF86AudioRaiseVolume, exec, pactl set-sink-volume @DEFAULT_SINK@ +5% && $HOME/.config/scripts/osd_notify.sh "Volume" "Volume up 5 percent" "audio-volume-high"
-bind = , XF86AudioLowerVolume, exec, pactl set-sink-volume @DEFAULT_SINK@ -5% && $HOME/.config/scripts/osd_notify.sh "Volume" "Volume down 5 percent" "audio-volume-low"
+# OSDs for hardware keys
+bind = , XF86AudioRaiseVolume, exec, pactl set-sink-volume @DEFAULT_SINK@ +5% && $HOME/.config/scripts/osd_notify.sh "Volume" "Volume up 5 %" "audio-volume-high"
+bind = , XF86AudioLowerVolume, exec, pactl set-sink-volume @DEFAULT_SINK@ -5% && $HOME/.config/scripts/osd_notify.sh "Volume" "Volume down 5 %" "audio-volume-low"
 bind = , XF86AudioMute, exec, pactl set-sink-mute @DEFAULT_SINK@ toggle && $HOME/.config/scripts/osd_notify.sh "Volume" "Mute toggled" "audio-volume-muted"
-bind = , XF86MonBrightnessUp, exec, brightnessctl set +5% && $HOME/.config/scripts/osd_notify.sh "Brightness" "Brightness up 5 percent" "display-brightness-high"
-bind = , XF86MonBrightnessDown, exec, brightnessctl set 5%- && $HOME/.config/scripts/osd_notify.sh "Brightness" "Brightness down 5 percent" "display-brightness-low"
+bind = , XF86MonBrightnessUp, exec, brightnessctl set +5% && $HOME/.config/scripts/osd_notify.sh "Brightness" "Brightness up 5 %" "display-brightness-high"
+bind = , XF86MonBrightnessDown, exec, brightnessctl set 5%- && $HOME/.config/scripts/osd_notify.sh "Brightness" "Brightness down 5 %" "display-brightness-low"
 
 # Logout / lock (fallback)
 bind = $mod+SHIFT, ESCAPE, exec, $HOME/.config/scripts/lock.sh
 
 # Idle handling (hypridle)
 exec-once = hypridle
-'
-write_file "$BASE/hypr/hyprland.conf" "$HYPR_CONF"
+EOF
 
 # -------------------------------------------------------------------------
 # hyprpaper.conf (simple preload)
 # -------------------------------------------------------------------------
-HYPR_PAPER_CONF='
+write_file "$BASE/hypr/hyprpaper.conf" - <<'EOF'
 preload = $HOME/Pictures/wallpaper/*
 wallpaper = DP-1, $HOME/Pictures/wallpaper/default.jpg
 wallpaper = DP-2, $HOME/Pictures/wallpaper/default.jpg
-'
-write_file "$BASE/hypr/hyprpaper.conf" "$HYPR_PAPER_CONF"
+EOF
 
 # -------------------------------------------------------------------------
 # hypridle.conf (idle → lock after 5 min, suspend after 15 min)
 # -------------------------------------------------------------------------
-HYPR_IDLE_CONF='
+write_file "$BASE/hypr/hypridle.conf" - <<'EOF'
 default_timeout = 300
 default_lock = $HOME/.config/scripts/lock.sh
 
 timeout 900 {
     exec = systemctl suspend
 }
-'
-write_file "$BASE/hypr/hypridle.conf" "$HYPR_IDLE_CONF"
+EOF
 
 # -------------------------------------------------------------------------
 # hyprlock.conf (simple lock‑screen)
 # -------------------------------------------------------------------------
-HYPR_LOCK_CONF='
+write_file "$BASE/hypr/hyprlock.conf" - <<'EOF'
 background {
     path = $HOME/.config/hyprlock.jpg
     blur_passes = 0
@@ -390,15 +359,14 @@ input-field {
     background_color = rgba(0,0,0,0.6)
     text_color = rgba(255,255,255,0.9)
 }
-'
-write_file "$BASE/hypr/hyprlock.conf" "$HYPR_LOCK_CONF"
+EOF
 
 # -------------------------------------------------------------------------
 # Quickshell QML files (panel, launcher, wallpaper selector, AI sidebar)
 # -------------------------------------------------------------------------
 
-# ----- panel.qml (plain‑text labels) -----
-PANEL_QML='
+# panel.qml – plain‑text labels (no Unicode icons)
+write_file "$BASE/quickshell/panel.qml" - <<'EOF'
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
@@ -407,7 +375,6 @@ import "palette.json" as Palette
 import Qt.labs.platform 1.1
 
 Item {
-    id: root
     width: Screen.width
     height: 32
     visible: true
@@ -427,12 +394,11 @@ Item {
         anchors.margins: 4
         spacing: 12
 
-        // Workspace numbers
+        // Workspace numbers (plain text)
         Text {
-            id: ws
             text: {
                 var p = new Process()
-                p.start("sh", ["-c", "hyprctl workspaces -j | jq -r \'.[] .name\' | paste -sd \' \' -"])
+                p.start("sh", ["-c", "hyprctl workspaces -j | jq -r '.[] .name' | paste -sd ' ' -"])
                 p.waitForFinished()
                 return p.readAllStandardOutput().trim()
             }
@@ -441,13 +407,12 @@ Item {
             font.pixelSize: 13
         }
 
-        // Network status (wired + wifi)
+        // Network (wired + wifi) – plain text
         Item {
-            width: 120; height: parent.height
+            width: 120
             RowLayout { anchors.fill: parent; spacing: 4 }
 
             Text {
-                id: wired
                 text: "Wired"
                 color: netState ? Palette.onBase : "grey"
                 font.family: "SFMono Nerd Font Mono"
@@ -487,7 +452,7 @@ Item {
             }
             function update() {
                 var p = new Process()
-                p.start("sh", ["-c", "ip link show up | grep -E \"state UP\" | wc -l"])
+                p.start("sh", ["-c", "ip link show up | grep -E 'state UP' | wc -l"])
                 p.waitForFinished()
                 netState = parseInt(p.readAllStandardOutput().trim()) > 0
                 var w = new Process()
@@ -498,13 +463,13 @@ Item {
             }
         }
 
-        // Volume control
+        // Volume
         Item {
-            width: 80; height: parent.height
+            width: 80
             RowLayout { anchors.fill: parent; spacing: 4 }
 
             Text {
-                id: volIcon
+                id: volLabel
                 text: mute ? "Muted" : "Volume"
                 color: Palette.onBase
                 font.family: "SFMono Nerd Font Mono"
@@ -553,11 +518,11 @@ Item {
             }
         }
 
-        // Battery + power profile (laptop only)
+        // Battery / power profile (laptop)
         Item {
-            id: batteryItem
+            id: battery
             visible: isLaptop
-            width: 120; height: parent.height
+            width: 120
             RowLayout { anchors.fill: parent; spacing: 4 }
 
             Text { text: "Battery"; font.family: "SFMono Nerd Font Mono"; color: Palette.onBase }
@@ -607,14 +572,13 @@ Item {
             }
         }
 
-        // Brightness control (laptop only)
+        // Brightness (laptop only)
         Item {
-            id: brightnessItem
-            visible: batteryItem.isLaptop
-            width: 80; height: parent.height
+            visible: battery.isLaptop
+            width: 80
             RowLayout { anchors.fill: parent; spacing: 4 }
 
-            Text { id: brightLabel; text: "Brightness"; font.family: "SFMono Nerd Font Mono"; color: Palette.onBase }
+            Text { text: "Brightness"; font.family: "SFMono Nerd Font Mono"; color: Palette.onBase }
             Text { id: brightPct; text: level + "%"; color: Palette.onBase; font.family: "SFMono Nerd Font Mono" }
 
             MouseArea {
@@ -646,18 +610,16 @@ Item {
 
         // Clock
         Text {
-            id: clock
             text: Qt.formatTime(new Date(), "HH:mm")
             color: Palette.onBase
             font.family: "SFMono Nerd Font Mono"
             font.pixelSize: 13
             MouseArea { anchors.fill: parent; onClicked: Qt.openUrlExternally("gnome-calendar") }
-            Timer { interval: 60000; running: true; repeat: true
-                    onTriggered: clock.text = Qt.formatTime(new Date(), "HH:mm") }
+            Timer { interval: 60000; running: true; repeat: true; onTriggered: text = Qt.formatTime(new Date(), "HH:mm") }
         }
     }
 
-    // OSD overlay – used by hardware‑key bindings
+    // OSD overlay (used by hardware‑key bindings)
     NotifyOverlay {
         anchors.fill: parent
         margin: 8
@@ -670,11 +632,10 @@ Item {
         animationDuration: 150
     }
 }
-'
-write_file "$BASE/quickshell/panel.qml" "$PANEL_QML"
+EOF
 
-# ----- launcher.qml --------------------------------------------------------
-LAUNCHER_QML='
+# launcher.qml – app launcher grid
+write_file "$BASE/quickshell/launcher.qml" - <<'EOF'
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
@@ -683,7 +644,6 @@ import "palette.json" as Palette
 import Qt.labs.platform 1.1
 
 Item {
-    id: root
     width: Screen.width
     height: Screen.height
     visible: false
@@ -700,12 +660,9 @@ Item {
     Rectangle { anchors.fill: parent; color: Palette.base; opacity: 0.85 }
 
     GridView {
-        id: grid
         focus: true
         anchors.centerIn: parent
-        cellWidth: 96
-        cellHeight: 96
-        spacing: 12
+        cellWidth: 96; cellHeight: 96; spacing: 12
         clip: true
         model: ListModel { id: appModel }
 
@@ -717,8 +674,7 @@ Item {
                 color: hovered ? Palette.surface : "transparent"
                 Image {
                     anchors.centerIn: parent
-                    sourceSize.width: 64
-                    sourceSize.height: 64
+                    sourceSize.width: 64; sourceSize.height: 64
                     source: model.icon
                     fillMode: Image.PreserveAspectFit
                 }
@@ -759,7 +715,7 @@ Item {
         for (var i = 0; i < folder.count; ++i) {
             var entry = folder.get(i)
             var lines = entry.fileContent.split("\n")
-            var name = ""; var exec = ""; var icon = ""
+            var name = "", exec = "", icon = ""
             for (var l = 0; l < lines.length; ++l) {
                 var line = lines[l].trim()
                 if (line.startsWith("Name=") && !name) name = line.slice(5)
@@ -776,11 +732,10 @@ Item {
 
     Keys.onReleased: if (event.key === Qt.Key_Escape) root.visible = false
 }
-'
-write_file "$BASE/quickshell/launcher.qml" "$LAUNCHER_QML"
+EOF
 
-# ----- wallpaper-selector.qml -----------------------------------------------
-WALLPAPER_QML='
+# wallpaper-selector.qml – wallpaper selector grid
+write_file "$BASE/quickshell/wallpaper-selector.qml" - <<'EOF'
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
@@ -789,7 +744,6 @@ import "palette.json" as Palette
 import Qt.labs.platform 1.1
 
 Item {
-    id: root
     width: Screen.width
     height: Screen.height
     visible: false
@@ -809,9 +763,7 @@ Item {
         id: thumbGrid
         focus: true
         anchors.centerIn: parent
-        cellWidth: 200
-        cellHeight: 150
-        spacing: 12
+        cellWidth: 200; cellHeight: 150; spacing: 12
         clip: true
         model: ListModel { id: wpModel }
 
@@ -850,7 +802,7 @@ Item {
     }
 
     Component.onCompleted: {
-        var folder = Qt.labs.platform.FolderListModel {
+        var folder = Qt.labs.Platform.FolderListModel {
             folder: "file://" + Qt.getenv("HOME") + "/Pictures/wallpaper"
             nameFilters: ["*.jpg","*.jpeg","*.png","*.webp"]
         }
@@ -860,13 +812,12 @@ Item {
         }
     }
 
-    Keys.onReleased: if (event.key === Qt.Key_Escape) root.visible = false
+    Keys.onReleased: if (event.key === Qt.Key_Escape) visible = false
 }
-'
-write_file "$BASE/quickshell/wallpaper-selector.qml" "$WALLPAPER_QML"
+EOF
 
-# ----- ai-sidebar.qml (ChatGPT, Gemini, Zukijourney, Ollama) -----------------
-AI_SIDEBAR_QML='
+# ai-sidebar.qml – ChatGPT, Gemini, Zukijourney, Ollama
+write_file "$BASE/quickshell/ai-sidebar.qml" - <<'EOF'
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
@@ -875,7 +826,6 @@ import "palette.json" as Palette
 import Qt.labs.platform 1.1
 
 Item {
-    id: root
     width: 380
     height: Screen.height
     visible: false
@@ -960,7 +910,7 @@ Item {
         }
     }
 
-    // Persistence of selected backend/model
+    // Persistence (backend + optional model)
     property var state: {
         "backend": "ChatGPT",
         "backendIndex": 0,
@@ -987,12 +937,12 @@ Item {
     ListModel { id: ollamaModels }
     function fetchOllamaModels() {
         var proc = new Process()
-        proc.start("sh", ["-c", "curl -s http://127.0.0.1:11434/api/tags | jq -r \\'models[].name\\'"])
+        proc.start("sh", ["-c", "curl -s http://127.0.0.1:11434/api/tags | jq -r 'models[].name'"])
         proc.waitForFinished()
         var out = proc.readAllStandardOutput().trim()
         ollamaModels.clear()
-        out.split("\n").forEach(function(m){ ollamaModels.append({ "name": m }) })
-        if (state.model === "" && ollamaModels.count > 0) {
+        out.split("\n").forEach(function (m) { ollamaModels.append({ "name": m }) })
+        if (!state.model && ollamaModels.count > 0) {
             state.model = ollamaModels.get(0).name
             state.modelIndex = 0
         }
@@ -1012,22 +962,22 @@ Item {
             cmd = `curl -s -X POST https://api.openai.com/v1/chat/completions \\
                 -H "Authorization: Bearer $OPENAI_API_KEY" \\
                 -H "Content-Type: application/json" \\
-                -d '\''{"model":"gpt-4o-mini","messages":[{"role":"user","content":"${msg}"}]}'\'' | jq -r '.choices[0].message.content'`
+                -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"${msg}"}]}' | jq -r '.choices[0].message.content'`
         } else if (backend === "Google Gemini") {
             cmd = `curl -s -X POST https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=$GEMINI_API_KEY \\
                 -H "Content-Type: application/json" \\
-                -d '\''{"contents":[{"role":"user","parts":[{"text":"${msg}"}]}]}'\'' | jq -r '.candidates[0].content.parts[0].text'`
+                -d '{"contents":[{"role":"user","parts":[{"text":"${msg}"}]}]}' | jq -r '.candidates[0].content.parts[0].text'`
         } else if (backend === "Zukijourney") {
-            // Zukijourney uses its own API key ($ZUKI_API_KEY) – same format as OpenAI
+            // Zukijourney uses the same “Bearer token” format as OpenAI
             cmd = `curl -s -X POST https://zukijourney.com/api/v1/chat \\
                 -H "Content-Type: application/json" \\
                 -H "Authorization: Bearer $ZUKI_API_KEY" \\
-                -d '\''{"message":"${msg}"}'\'' | jq -r '.response'`
+                -d '{"message":"${msg}"}' | jq -r '.response'`
         } else if (backend === "Ollama") {
             var model = modelSelect.currentText
             cmd = `curl -s -X POST http://127.0.0.1:11434/api/chat \\
                 -H "Content-Type: application/json" \\
-                -d '\''{"model":"${model}","messages":[{"role":"user","content":"${msg}"}]}'\'' | jq -r '.message.content'`
+                -d '{"model":"${model}","messages":[{"role":"user","content":"${msg}"}]}' | jq -r '.message.content'`
         }
 
         var proc = new Process()
@@ -1040,63 +990,70 @@ Item {
         })
     }
 
-    Keys.onReleased: if (event.key === Qt.Key_Escape) root.visible = false
+    Keys.onReleased: if (event.key === Qt.Key_Escape) visible = false
 }
-'
-write_file "$BASE/quickshell/ai-sidebar.qml" "$AI_SIDEBAR_QML"
+EOF
 
 # -------------------------------------------------------------------------
-# Helper scripts (OSD, launcher, selector, AI sidebar, lock, gamemode,
-#                 screenshot, wallpaper navigation)
+# Helper scripts (OSD, launcher, selector, AI, lock, gamemode, screenshot,
+#                  wallpaper navigation)
 # -------------------------------------------------------------------------
 
-OSD_NOTIFY='#!/usr/bin/env bash
+# osd_notify.sh – used by the panel and keybindings
+write_file "$BASE/scripts/osd_notify.sh" - <<'EOF'
+#!/usr/bin/env bash
 title=$1
 body=$2
 icon=${3:-dialog-information}
 notify-send -i "$icon" "$title" "$body" -t 1500
-'
-write_file "$BASE/scripts/osd_notify.sh" "$OSD_NOTIFY"
+EOF
 chmod +x "$BASE/scripts/osd_notify.sh"
 
-SHOW_LAUNCHER='#!/usr/bin/env bash
+# show-launcher.sh
+write_file "$SCRIPT/show-launcher.sh" - <<'EOF'
+#!/usr/bin/env bash
 qdbus org.kde.quickshell /org/kde/quickshell org.kde.quickshell.Eval "launcher.visible = true; launcher.forceActiveFocus()"
-'
-write_file "$BASE/scripts/show-launcher.sh" "$SHOW_LAUNCHER"
-chmod +x "$BASE/scripts/show-launcher.sh"
+EOF
+chmod +x "$SCRIPT/show-launcher.sh"
 
-SHOW_WALL='#!/usr/bin/env bash
+# show-wallpaper-selector.sh
+write_file "$SCRIPT/show-wallpaper-selector.sh" - <<'EOF'
+#!/usr/bin/env bash
 qdbus org.kde.quickshell /org/kde/quickshell org.kde.quickshell.Eval "wallpaperSelector.visible = true; wallpaperSelector.forceActiveFocus()"
-'
-write_file "$BASE/scripts/show-wallpaper-selector.sh" "$SHOW_WALL"
-chmod +x "$BASE/scripts/show-wallpaper-selector.sh"
+EOF
+chmod +x "$SCRIPT/show-wallpaper-selector.sh"
 
-SHOW_AI='#!/usr/bin/env bash
+# show-ai-sidebar.sh
+write_file "$SCRIPT/show-ai-sidebar.sh" - <<'EOF'
+#!/usr/bin/env bash
 qdbus org.kde.quickshell /org/kde/quickshell org.kde.quickshell.Eval "aiSidebar.visible = true; aiSidebar.forceActiveFocus()"
-'
-write_file "$BASE/scripts/show-ai-sidebar.sh" "$SHOW_AI"
-chmod +x "$BASE/scripts/show-ai-sidebar.sh"
+EOF
+chmod +x "$SCRIPT/show-ai-sidebar.sh"
 
-LOCK_SH='#!/usr/bin/env bash
-WALL=$(hyprctl getoption decoration:active_wallpaper -j | jq -r '\''.str'\'')
+# lock.sh
+write_file "$SCRIPT/lock.sh" - <<'EOF'
+#!/usr/bin/env bash
+WALL=$(hyprctl getoption decoration:active_wallpaper -j | jq -r '.str')
 exec hyprlock -c $HOME/.config/hypr/hyprlock.conf -b "$WALL"
-'
-write_file "$BASE/scripts/lock.sh" "$LOCK_SH"
-chmod +x "$BASE/scripts/lock.sh"
+EOF
+chmod +x "$SCRIPT/lock.sh"
 
-GAMEMODE_SH='#!/usr/bin/env bash
+# gamemode.sh (adds/removes a dummy variable; just a placeholder)
+write_file "$SCRIPT/gamemode.sh" - <<'EOF'
+#!/usr/bin/env bash
 if grep -q "gmod=1" $HOME/.config/hypr/hyprland.conf; then
-    sed -i '\''/gmod=1/d'\'' $HOME/.config/hypr/hyprland.conf
+    sed -i '/gmod=1/d' $HOME/.config/hypr/hyprland.conf
     hyprctl reload
 else
     echo "gmod=1" >> $HOME/.config/hypr/hyprland.conf
     hyprctl reload
 fi
-'
-write_file "$BASE/scripts/gamemode.sh" "$GAMEMODE_SH"
-chmod +x "$BASE/scripts/gamemode.sh"
+EOF
+chmod +x "$SCRIPT/gamemode.sh"
 
-SCREENSHOT_SH='#!/usr/bin/env bash
+# screenshot.sh (full / area / window / monitor)
+write_file "$SCRIPT/screenshot.sh" - <<'EOF'
+#!/usr/bin/env bash
 mode=$1
 out=$HOME/Pictures/screenshots/$(date +%Y-%m-%d-%H%M%S).png
 mkdir -p "$(dirname "$out")"
@@ -1104,70 +1061,74 @@ mkdir -p "$(dirname "$out")"
 case "$mode" in
     full)   grim "$out" ;;
     area)   grim -g "$(slurp)" "$out" ;;
-    window) grim -g "$(hyprctl activewindow -j | jq -r '\''.at | @sh'\'')" "$out" ;;
-    monitor) grim -o "$(hyprctl monitors -j | jq -r '\''.[0].name'\'')" "$out" ;;
-    *) echo "Usage: $0 {full|area|window|monitor}" ; exit 1 ;;
+    window) grim -g "$(hyprctl activewindow -j | jq -r '.at | @sh')" "$out" ;;
+    monitor) grim -o "$(hyprctl monitors -j | jq -r '.[0].name')" "$out" ;;
+    *) echo "Usage: $0 {full|area|window|monitor}"; exit 1 ;;
 esac
 
 wl-copy < "$out"
 notify-send "Screenshot" "Saved to $out" -i camera-photo
-'
-write_file "$BASE/scripts/screenshot.sh" "$SCREENSHOT_SH"
-chmod +x "$BASE/scripts/screenshot.sh"
+EOF
+chmod +x "$SCRIPT/screenshot.sh"
 
-WALL_NEXT='#!/usr/bin/env bash
-DIR="$HOME/Pictures/wallpaper"
+# wallpaper_next.sh
+write_file "$SCRIPT/wallpaper_next.sh" - <<'EOF'
+#!/usr/bin/env bash
+DIR=$HOME/Pictures/wallpaper
 shopt -s nullglob
 files=("$DIR"/*.{jpg,jpeg,png,webp})
 [[ ${#files[@]} -eq 0 ]] && exit 0
-current=$(hyprctl getoption decoration:active_wallpaper -j | jq -r '\''.str'\'')
+cur=$(hyprctl getoption decoration:active_wallpaper -j | jq -r '.str')
 for i in "${!files[@]}"; do
-  [[ "${files[$i]}" == "$current" ]] && idx=$i && break
+    [[ "${files[$i]}" == "$cur" ]] && idx=$i && break
 done
-next=$(((idx + 1) % ${#files[@]}))
+next=$(((idx+1) % ${#files[@]}))
 hyprctl keyword decoration:active_wallpaper "${files[$next]}"
 $HOME/.config/scripts/apply_matugen.sh
-'
-write_file "$BASE/scripts/wallpaper_next.sh" "$WALL_NEXT"
-chmod +x "$BASE/scripts/wallpaper_next.sh"
+EOF
+chmod +x "$SCRIPT/wallpaper_next.sh"
 
-WALL_PREV='#!/usr/bin/env bash
-DIR="$HOME/Pictures/wallpaper"
+# wallpaper_prev.sh
+write_file "$SCRIPT/wallpaper_prev.sh" - <<'EOF'
+#!/usr/bin/env bash
+DIR=$HOME/Pictures/wallpaper
 shopt -s nullglob
-files=("$DIR"/*.{jpg,jpeg,png,webp})
+files=("$DIR"/*.{jpg,jpeg,png,webp}})
 [[ ${#files[@]} -eq 0 ]] && exit 0
-current=$(hyprctl getoption decoration:active_wallpaper -j | jq -r '\''.str'\'')
+cur=$(hyprctl getoption decoration:active_wallpaper -j | jq -r '.str')
 for i in "${!files[@]}"; do
-  [[ "${files[$i]}" == "$current" ]] && idx=$i && break
+    [[ "${files[$i]}" == "$cur" ]] && idx=$i && break
 done
-prev=$(((idx - 1 + ${#files[@]}) % ${#files[@]}))
+prev=$(((idx-1+${#files[@]}) % ${#files[@]}))
 hyprctl keyword decoration:active_wallpaper "${files[$prev]}"
 $HOME/.config/scripts/apply_matugen.sh
-'
-write_file "$BASE/scripts/wallpaper_prev.sh" "$WALL_PREV"
-chmod +x "$BASE/scripts/wallpaper_prev.sh"
+EOF
+chmod +x "$SCRIPT/wallpaper_prev.sh"
 
-WALL_RAND='#!/usr/bin/env bash
-DIR="$HOME/Pictures/wallpaper"
+# wallpaper_random.sh
+write_file "$SCRIPT/wallpaper_random.sh" - <<'EOF'
+#!/usr/bin/env bash
+DIR=$HOME/Pictures/wallpaper
 shopt -s nullglob
-files=("$DIR"/*.{jpg,jpeg,png,webp})
+files=("$DIR"/*.{jpg,jpeg,png,webp}})
 [[ ${#files[@]} -eq 0 ]] && exit 0
 rand=$((RANDOM % ${#files[@]}))
 hyprctl keyword decoration:active_wallpaper "${files[$rand]}"
 $HOME/.config/scripts/apply_matugen.sh
-'
-write_file "$BASE/scripts/wallpaper_random.sh" "$WALL_RAND"
-chmod +x "$BASE/scripts/wallpaper_random.sh"
+EOF
+chmod +x "$SCRIPT/wallpaper_random.sh"
 
 # -------------------------------------------------------------------------
-# apply_matugen.sh – generate Material‑You palette, update GTK/Kvantum/btop,
-#                    write Quickshell palette and reload Quickshell.
+# apply_matugen.sh – generate Material‑You palette and update the UI
 # -------------------------------------------------------------------------
-APPLY_MATUGEN='#!/usr/bin/env bash
-WALL=$(hyprctl getoption decoration:active_wallpaper -j | jq -r '\''.str'\'')
+write_file "$SCRIPT/apply_matugen.sh" - <<'EOF'
+#!/usr/bin/env bash
+# Generate a Material‑You palette from the current wallpaper
+WALL=$(hyprctl getoption decoration:active_wallpaper -j | jq -r '.str')
+# matugen‑bin is the AUR binary that implements the Matugen crate
 matugen-bin -i "$WALL" -m tonalspot -o "$HOME/.config/matugen/palette.json"
 
-# GTK settings
+# GTK settings (Material‑You)
 cat > "$HOME/.config/gtk-3.0/settings.ini" <<INI
 [Settings]
 gtk-theme-name = Matugen
@@ -1182,42 +1143,42 @@ INI
 # Kvantum theme (mirrors the palette)
 cat > "$HOME/.config/Kvantum/Matugen.kvconfig" <<KV
 <kvantum>
-  <Color name="Background" value="$(jq -r '\''.scheme.base'\'\' "$HOME/.config/matugen/palette.json")"/>
-  <Color name="Foreground" value="$(jq -r '\''.scheme.on_base'\'\' "$HOME/.config/matugen/palette.json")"/>
-  <Color name="Accent" value="$(jq -r '\''.scheme.accent'\'\' "$HOME/.config/matugen/palette.json")"/>
+  <Color name="Background" value="$(jq -r '.scheme.base' "$HOME/.config/matugen/palette.json")"/>
+  <Color name="Foreground" value="$(jq -r '.scheme.on_base' "$HOME/.config/matugen/palette.json")"/>
+  <Color name="Accent" value="$(jq -r '.scheme.accent' "$HOME/.config/matugen/palette.json")"/>
 </kvantum>
 KV
 
-# btop theme (so the terminal UI matches)
+# btop theme
 cat > "$HOME/.config/btop/btop.conf" <<BT
 theme=custom
 [custom_theme]
-background=$(jq -r '\''.scheme.base'\'\' "$HOME/.config/matugen/palette.json")
-foreground=$(jq -r '\''.scheme.on_base'\'\' "$HOME/.config/matugen/palette.json")
-accent=$(jq -r '\''.scheme.accent'\'\' "$HOME/.config/matugen/palette.json")
+background=$(jq -r '.scheme.base' "$HOME/.config/matugen/palette.json")
+foreground=$(jq -r '.on_base' "$HOME/.config/matugen/palette.json")
+accent=$(jq -r '.accent' "$HOME/.config/matugen/palette.json")
 BT
 
-# Quickshell palette (used by all QML components)
+# Quickshell palette (used by panel, launcher, etc.)
 cat > "$HOME/.config/quickshell/palette.json" <<JSON
 {
-  "accent":   "$(jq -r '\''.scheme.accent'\'\' "$HOME/.config/matugen/palette.json")",
-  "base":     "$(jq -r '\''.scheme.base'\'\' "$HOME/.config/matugen/palette.json")",
-  "onBase":   "$(jq -r '\''.scheme.on_base'\'\' "$HOME/.config/matugen/palette.json")",
-  "surface":  "$(jq -r '\''.scheme.surface'\'\' "$HOME/.config/matugen/palette.json")",
-  "onSurface":"$(jq -r '\''.scheme.on_surface'\'\' "$HOME/.config/matugen/palette.json")"
+  "accent":   "$(jq -r '.scheme.accent' "$HOME/.config/matugen/palette.json")",
+  "base":     "$(jq -r '.scheme.base' "$HOME/.config/matugen/palette.json")",
+  "onBase":  "$(jq -r '.scheme.on_base' "$HOME/.config/matugen/palette.json")",
+  "surface": "$(jq -r '.scheme.surface' "$HOME/.config/matugen/palette.json")",
+  "onSurface":"$(jq -r '.scheme.on_surface' "$HOME/.config/matugen/palette.json")"
 }
 JSON
 
-# Notify Quickshell to reload its QML files
+# Tell Quickshell to reload its QML files (SIGUSR1)
 kill -SIGUSR1 quickshell 2>/dev/null || true
-'
-write_file "$BASE/scripts/apply_matugen.sh" "$APPLY_MATUGEN"
-chmod +x "$BASE/scripts/apply_matugen.sh"
+EOF
+chmod +x "$SCRIPT/apply_matugen.sh"
 
 # -------------------------------------------------------------------------
 # systemd‑user services (quickshell, hypridle)
 # -------------------------------------------------------------------------
-QUICKSHELL_SVC='[Unit]
+write_file "$BASE/systemd/user/quickshell.service" - <<'EOF'
+[Unit]
 Description=Quickshell – panel, launcher, wallpaper selector, AI sidebar
 After=graphical-session.target
 
@@ -1232,10 +1193,10 @@ RestartSec=5
 
 [Install]
 WantedBy=default.target
-'
-write_file "$BASE/systemd/user/quickshell.service" "$QUICKSHELL_SVC"
+EOF
 
-HYPRIDLE_SVC='[Unit]
+write_file "$BASE/systemd/user/hypridle.service" - <<'EOF'
+[Unit]
 Description=Hypridle – idle timeout & lock
 After=graphical-session.target
 
@@ -1245,8 +1206,7 @@ Restart=always
 
 [Install]
 WantedBy=default.target
-'
-write_file "$BASE/systemd/user/hypridle.service" "$HYPRIDLE_SVC"
+EOF
 
 # -------------------------------------------------------------------------
 # Enable the user services
@@ -1264,18 +1224,18 @@ systemctl --user enable --now hypridle.service
 # Clone LazyVim (official method)
 # -------------------------------------------------------------------------
 if [[ -d "$HOME/.config/nvim" && $FORCE_OVERWRITE -eq 0 ]]; then
-    log "LazyVim already present – skipping clone (use --force to replace)."
+  log "LazyVim already present – use --force to replace."
 else
-    log "Cloning LazyVim into $HOME/.config/nvim"
-    git clone https://github.com/LazyVim/LazyVim.git "$HOME/.config/nvim"
-    log "LazyVim cloned – first run of nvim will install plugins."
+  log "Cloning LazyVim into $HOME/.config/nvim"
+  git clone https://github.com/LazyVim/LazyVim.git "$HOME/.config/nvim"
+  log "LazyVim cloned – run nvim once to install plugins."
 fi
 
 # -------------------------------------------------------------------------
-# Generate the initial Material‑You palette (so the panel is coloured)
+# Generate the initial Material‑You palette (so the panel starts coloured)
 # -------------------------------------------------------------------------
-log "Running apply_matugen.sh to generate the initial palette"
-"$BASE/scripts/apply_matugen.sh"
+log "Generating initial Material‑You palette"
+"$SCRIPT/apply_matugen.sh"
 
 # -------------------------------------------------------------------------
 # Final instructions
@@ -1285,14 +1245,16 @@ log "Setup finished"
 log ""
 log "Next steps:"
 log "  • Log out and log back in, or start Hyprland with \"Hyprland\"."
-log "  • The top panel, launcher (Super+Space), wallpaper selector (Super+W) and AI sidebar (Super+I) should appear."
-log "  • All UI elements use the \"SFMono Nerd Font Mono\" family."
-log "  • Volume and brightness hardware keys already show OSD pop‑ups."
-log "  • To use the AI assistant set the required environment variables:"
-log "        • export OPENAI_API_KEY=…   # OpenAI (ChatGPT) key"
-log "        • export GEMINI_API_KEY=…   # Google Gemini key"
-log "        • export ZUKI_API_KEY=…    # Zukijourney key (same format as OpenAI key)"
-log "        • Ollama – run a local Ollama server on port 11434."
-log "  • The selected backend/model is stored in $HOME/.config/ai/sidebar_state.json."
-log "  • LazyVim is ready – launch \`nvim\` once to complete plugin installation."
+log "  • The top panel (Super+Space for launcher, Super+W for wallpaper selector,"
+log "    Super+I for AI sidebar) should be visible."
+log "  • All UI uses the \"SFMono Nerd Font Mono\" family."
+log "  • Volume/brightness hardware keys now show OSD pop‑ups."
+log "  • Export your AI keys:"
+log "      • export OPENAI_API_KEY=…   # ChatGPT"
+log "      • export GEMINI_API_KEY=…   # Google Gemini"
+log "      • export ZUKI_API_KEY=…    # Zukijourney (same format as OpenAI)"
+log "      • Run Ollama locally on port 11434 for the Ollama backend."
+log "  • The chosen backend/model is stored at"
+log "      $HOME/.config/ai/sidebar_state.json"
+log "  • Run nvim once to finish LazyVim setup."
 log "============================================================"
