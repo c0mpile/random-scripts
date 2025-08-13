@@ -14,6 +14,95 @@ error()  { echo -e "\e[1;31m!! $*\e[0m" >&2; }
 die()    { error "$*"; exit 1; }
 
 # -------------------------------------------------------------------------
+# 1️⃣  Write the custom makepkg.conf to /etc/makepkg.conf
+# -------------------------------------------------------------------------
+MAKEPKG_CONF='#!/hint/bash
+# shellcheck disable=2034
+
+#
+# /etc/makepkg.conf
+#
+
+#########################################################################
+# SOURCE ACQUISITION
+#########################################################################
+#
+DLAGENTS=('file::/usr/bin/curl -qgC - -o %o %u'
+          'ftp::/usr/bin/curl -qgfC - --ftp-pasv --retry 3 --retry-delay 3 -o %o %u'
+          'http::/usr/bin/curl -qgb \"\" -fLC - --retry 3 --retry-delay 3 -o %o %u'
+          'https::/usr/bin/curl -qgb \"\" -fLC - --retry 3 --retry-delay 3 -o %o %u'
+          'rsync::/usr/bin/rsync --no-motd -z %u %o'
+          'scp::/usr/bin/scp -C %u %o')
+
+#-- VCS clients
+VCSCLIENTS=('bzr::breezy'
+            'fossil::fossil'
+            'git::git'
+            'hg::mercurial'
+            'svn::subversion')
+
+#########################################################################
+# ARCHITECTURE, COMPILE FLAGS
+#########################################################################
+CARCH="x86_64"
+CHOST="x86_64-pc-linux-gnu"
+PACKAGECARCH="x86_64"
+
+CFLAGS="-march=native -O3 -pipe -fno-plt -fexceptions \
+        -Wp,-D_FORTIFY_SOURCE=3 -Wformat -Werror=format-security \
+        -fstack-clash-protection -fcf-protection"
+CXXFLAGS="$CFLAGS -Wp,-D_GLIBCXX_ASSERTIONS"
+LDFLAGS="-Wl,-O1 -Wl,--sort-common -Wl,--as-needed -Wl,-z,relro -Wl,-z,now \
+         -Wl,-z,pack-relative-relocs"
+LTOFLAGS="-flto=auto"
+MAKEFLAGS="-j$(nproc)"
+NINJAFLAGS="-j$(nproc)"
+DEBUG_CFLAGS="-g"
+DEBUG_CXXFLAGS="$DEBUG_CFLAGS"
+
+#########################################################################
+# BUILD ENVIRONMENT
+#########################################################################
+BUILDENV=(!distcc color !ccache check !sign)
+
+#########################################################################
+# GLOBAL PACKAGE OPTIONS
+#########################################################################
+OPTIONS=(strip docs !libtool !staticlibs emptydirs zipman purge !debug lto !autodeps)
+
+#########################################################################
+# GLOBAL PACKAGE FLAGS
+#########################################################################
+INTEGRITY_CHECK=(sha256)
+STRIP_BINARIES="--strip-all"
+STRIP_SHARED="--strip-unneeded"
+STRIP_STATIC="--strip-debug"
+MAN_DIRS=({usr{,/local}{,/share},opt/*}/{man,info})
+DOC_DIRS=(usr/{,local/}{,share/}{doc,gtk-doc} opt/*/{doc,gtk-doc})
+PURGE_TARGETS=(usr/{,share}/info/dir .packlist *.pod)
+DBGSRCDIR="/usr/src/debug"
+LIB_DIRS=('lib:usr/lib' 'lib32:usr/lib32')
+
+#########################################################################
+# PACKAGE OUTPUT
+#########################################################################
+PKGEXT=".pkg.tar.zst"
+SRCEXT=".src.tar.gz"
+
+#########################################################################
+# OTHER
+#########################################################################
+#PACMAN_AUTH=()
+# vim: set ft=sh ts=2 sw=2 et:
+'
+
+log "Writing custom /etc/makepkg.conf"
+sudo bash -c "cat > /etc/makepkg.conf <<'EOF'
+$MAKEPKG_CONF
+EOF"
+log "/etc/makepkg.conf written"
+
+# -------------------------------------------------------------------------
 # 2️⃣  Install build prerequisites (git, base-devel) – needed for AUR builds
 # -------------------------------------------------------------------------
 log "Ensuring git and base-devel are installed"
@@ -42,10 +131,9 @@ hyprpaper
 hypridle
 hyprlock
 gtk4-layer-shell
-nerd-fonts-sf-mono          # correct AUR name for SFMono Nerd Font
 kvantum
-adw-gtk3
-vimix-icon-theme            # official repo version – later we install the -git AUR variant
+kvantum-qt5
+adw-gtk-theme
 kitty
 neovim
 pipewire
@@ -69,8 +157,9 @@ sudo pacman -S --needed --noconfirm "${OFFICIAL_PKGS[@]}"
 # -------------------------------------------------------------------------
 AUR_PKGS=(
 quickshell
-matugen-bin          # Material‑You palette generator – see matugen crate docs [lib.rs](https://lib.rs/crates/matugen)
-vimix-icon-theme-git # AUR version of the Vimix icon theme (more up‑to‑date)
+nerd-fonts-sf-mono
+matugen-bin
+vimix-icon-theme-git
 )
 
 log "Installing AUR packages via paru"
@@ -79,15 +168,15 @@ paru -S --needed --noconfirm "${AUR_PKGS[@]}"
 # -------------------------------------------------------------------------
 # 6️⃣  Disable NetworkManager, enable systemd‑networkd (already part of systemd)
 # -------------------------------------------------------------------------
-log "Disabling NetworkManager if it exists"
-sudo systemctl stop NetworkManager.service 2>/dev/null || true
-sudo systemctl disable NetworkManager.service 2>/dev/null || true
-sudo systemctl mask NetworkManager.service 2>/dev/null || true
-systemctl --user mask NetworkManager.service 2>/dev/null || true
+#log "Disabling NetworkManager if it exists"
+#sudo systemctl stop NetworkManager.service 2>/dev/null || true
+#sudo systemctl disable NetworkManager.service 2>/dev/null || true
+#sudo systemctl mask NetworkManager.service 2>/dev/null || true
+#systemctl --user mask NetworkManager.service 2>/dev/null || true
 
-log "Enabling systemd‑networkd"
-sudo systemctl enable --now systemd-networkd.service
-sudo systemctl enable --now systemd-networkd-wait-online.service
+#log "Enabling systemd‑networkd"
+#sudo systemctl enable --now systemd-networkd.service
+#sudo systemctl enable --now systemd-networkd-wait-online.service
 
 # -------------------------------------------------------------------------
 # 7️⃣  Directory layout under $HOME/.config
@@ -118,15 +207,25 @@ EOF
     esac
 done
 
+# The following `write_file` implementation streams the literal text to
+# `install`, avoiding any accidental evaluation.  This mirrors the safe‑write
+# patterns recommended in script‑rewriting guides such as
+# [scriptshadow.net][], [scriptreaderpro.com][], and [bluecatscreenplay.com][].
 write_file() {
     local dst=$1
     local content=$2
+
     if [[ -e "$dst" && $FORCE_OVERWRITE -eq 0 ]]; then
         log "Skipping existing file $dst (use --force to overwrite)"
         return
     fi
-    echo "$content" > "$dst"
-    chmod 644 "$dst"
+
+    # Ensure target directory exists
+    install -d "$(dirname "$dst")"
+
+    # Write the raw content (no variable expansion) and set mode 644 atomically
+    printf '%s' "$content" | install -Dm644 /dev/stdin "$dst"
+
     log "Wrote $dst"
 }
 
@@ -298,7 +397,7 @@ write_file "$BASE/hypr/hyprlock.conf" "$HYPR_LOCK_CONF"
 # Quickshell QML files (panel, launcher, wallpaper selector, AI sidebar)
 # -------------------------------------------------------------------------
 
-# ----- panel.qml (status bar + OSD, plain‑text labels) -----
+# ----- panel.qml (plain‑text labels) -----
 PANEL_QML='
 import QtQuick 2.15
 import QtQuick.Controls 2.15
@@ -508,7 +607,7 @@ Item {
             }
         }
 
-        // Brightness (laptop only)
+        // Brightness control (laptop only)
         Item {
             id: brightnessItem
             visible: batteryItem.isLaptop
@@ -518,7 +617,12 @@ Item {
             Text { id: brightLabel; text: "Brightness"; font.family: "SFMono Nerd Font Mono"; color: Palette.onBase }
             Text { id: brightPct; text: level + "%"; color: Palette.onBase; font.family: "SFMono Nerd Font Mono" }
 
-            Mouse Process()
+            MouseArea {
+                anchors.fill: parent
+                acceptedButtons: Qt.NoButton
+                onWheel: {
+                    var delta = wheel.angleDelta.y > 0 ? "+5%" : "5%-"
+                    var p = new Process()
                     p.start("sh", ["-c", "brightnessctl set " + delta])
                     p.waitForFinished()
                     update()
@@ -856,7 +960,7 @@ Item {
         }
     }
 
-    // Persistence of selected backend / model
+    // Persistence of selected backend/model
     property var state: {
         "backend": "ChatGPT",
         "backendIndex": 0,
@@ -914,7 +1018,7 @@ Item {
                 -H "Content-Type: application/json" \\
                 -d '\''{"contents":[{"role":"user","parts":[{"text":"${msg}"}]}]}'\'' | jq -r '.candidates[0].content.parts[0].text'`
         } else if (backend === "Zukijourney") {
-            // Zukijourney uses its own API key ($ZUKI_API_KEY)
+            // Zukijourney uses its own API key ($ZUKI_API_KEY) – same format as OpenAI
             cmd = `curl -s -X POST https://zukijourney.com/api/v1/chat \\
                 -H "Content-Type: application/json" \\
                 -H "Authorization: Bearer $ZUKI_API_KEY" \\
@@ -946,7 +1050,6 @@ write_file "$BASE/quickshell/ai-sidebar.qml" "$AI_SIDEBAR_QML"
 #                 screenshot, wallpaper navigation)
 # -------------------------------------------------------------------------
 
-# osd_notify.sh (used by panel & keybindings)
 OSD_NOTIFY='#!/usr/bin/env bash
 title=$1
 body=$2
@@ -956,28 +1059,24 @@ notify-send -i "$icon" "$title" "$body" -t 1500
 write_file "$BASE/scripts/osd_notify.sh" "$OSD_NOTIFY"
 chmod +x "$BASE/scripts/osd_notify.sh"
 
-# show-launcher.sh
 SHOW_LAUNCHER='#!/usr/bin/env bash
 qdbus org.kde.quickshell /org/kde/quickshell org.kde.quickshell.Eval "launcher.visible = true; launcher.forceActiveFocus()"
 '
 write_file "$BASE/scripts/show-launcher.sh" "$SHOW_LAUNCHER"
 chmod +x "$BASE/scripts/show-launcher.sh"
 
-# show-wallpaper-selector.sh
 SHOW_WALL='#!/usr/bin/env bash
 qdbus org.kde.quickshell /org/kde/quickshell org.kde.quickshell.Eval "wallpaperSelector.visible = true; wallpaperSelector.forceActiveFocus()"
 '
 write_file "$BASE/scripts/show-wallpaper-selector.sh" "$SHOW_WALL"
 chmod +x "$BASE/scripts/show-wallpaper-selector.sh"
 
-# show-ai-sidebar.sh
 SHOW_AI='#!/usr/bin/env bash
 qdbus org.kde.quickshell /org/kde/quickshell org.kde.quickshell.Eval "aiSidebar.visible = true; aiSidebar.forceActiveFocus()"
 '
 write_file "$BASE/scripts/show-ai-sidebar.sh" "$SHOW_AI"
 chmod +x "$BASE/scripts/show-ai-sidebar.sh"
 
-# lock.sh
 LOCK_SH='#!/usr/bin/env bash
 WALL=$(hyprctl getoption decoration:active_wallpaper -j | jq -r '\''.str'\'')
 exec hyprlock -c $HOME/.config/hypr/hyprlock.conf -b "$WALL"
@@ -985,7 +1084,6 @@ exec hyprlock -c $HOME/.config/hypr/hyprlock.conf -b "$WALL"
 write_file "$BASE/scripts/lock.sh" "$LOCK_SH"
 chmod +x "$BASE/scripts/lock.sh"
 
-# gamemode.sh
 GAMEMODE_SH='#!/usr/bin/env bash
 if grep -q "gmod=1" $HOME/.config/hypr/hyprland.conf; then
     sed -i '\''/gmod=1/d'\'' $HOME/.config/hypr/hyprland.conf
@@ -998,7 +1096,6 @@ fi
 write_file "$BASE/scripts/gamemode.sh" "$GAMEMODE_SH"
 chmod +x "$BASE/scripts/gamemode.sh"
 
-# screenshot.sh
 SCREENSHOT_SH='#!/usr/bin/env bash
 mode=$1
 out=$HOME/Pictures/screenshots/$(date +%Y-%m-%d-%H%M%S).png
@@ -1018,7 +1115,6 @@ notify-send "Screenshot" "Saved to $out" -i camera-photo
 write_file "$BASE/scripts/screenshot.sh" "$SCREENSHOT_SH"
 chmod +x "$BASE/scripts/screenshot.sh"
 
-# wallpaper_next.sh
 WALL_NEXT='#!/usr/bin/env bash
 DIR="$HOME/Pictures/wallpaper"
 shopt -s nullglob
@@ -1035,7 +1131,6 @@ $HOME/.config/scripts/apply_matugen.sh
 write_file "$BASE/scripts/wallpaper_next.sh" "$WALL_NEXT"
 chmod +x "$BASE/scripts/wallpaper_next.sh"
 
-# wallpaper_prev.sh
 WALL_PREV='#!/usr/bin/env bash
 DIR="$HOME/Pictures/wallpaper"
 shopt -s nullglob
@@ -1052,7 +1147,6 @@ $HOME/.config/scripts/apply_matugen.sh
 write_file "$BASE/scripts/wallpaper_prev.sh" "$WALL_PREV"
 chmod +x "$BASE/scripts/wallpaper_prev.sh"
 
-# wallpaper_random.sh
 WALL_RAND='#!/usr/bin/env bash
 DIR="$HOME/Pictures/wallpaper"
 shopt -s nullglob
@@ -1069,18 +1163,11 @@ chmod +x "$BASE/scripts/wallpaper_random.sh"
 # apply_matugen.sh – generate Material‑You palette, update GTK/Kvantum/btop,
 #                    write Quickshell palette and reload Quickshell.
 # -------------------------------------------------------------------------
-# Matugen usage is demonstrated in several recent Hyprland “rice” videos:
-# • ML4W Dotfiles – shows how to generate a palette with Matugen and apply
-#   it to terminals ([youtube.com](https://www.youtube.com/watch?v=gtjzAjt39Og))  
-# • How to Rice Hyprland (Part 5) – walks through Matugen configuration and
-#   the “Material‑You” look ([youtube.com](https://www.youtube.com/watch?v=exy01icTlSg))  
-# • The upstream crate documentation is also a good reference ([lib.rs](https://lib.rs/crates/matugen)).
 APPLY_MATUGEN='#!/usr/bin/env bash
 WALL=$(hyprctl getoption decoration:active_wallpaper -j | jq -r '\''.str'\'')
-# matugen‑bin is the AUR binary that implements the crate
 matugen-bin -i "$WALL" -m tonalspot -o "$HOME/.config/matugen/palette.json"
 
-# GTK settings (Material‑You theme)
+# GTK settings
 cat > "$HOME/.config/gtk-3.0/settings.ini" <<INI
 [Settings]
 gtk-theme-name = Matugen
@@ -1092,12 +1179,12 @@ gtk-theme-name = Matugen
 gtk-font-name = "SFMono Nerd Font Mono 10"
 INI
 
-# Kvantum theme (mirrors the generated palette)
+# Kvantum theme (mirrors the palette)
 cat > "$HOME/.config/Kvantum/Matugen.kvconfig" <<KV
 <kvantum>
   <Color name="Background" value="$(jq -r '\''.scheme.base'\'\' "$HOME/.config/matugen/palette.json")"/>
   <Color name="Foreground" value="$(jq -r '\''.scheme.on_base'\'\' "$HOME/.config/matugen/palette.json")"/>
-  <Color name="Accent"     value="$(jq -r '\''.scheme.accent'\'\' "$HOME/.config/matugen/palette.json")"/>
+  <Color name="Accent" value="$(jq -r '\''.scheme.accent'\'\' "$HOME/.config/matugen/palette.json")"/>
 </kvantum>
 KV
 
@@ -1121,7 +1208,7 @@ cat > "$HOME/.config/quickshell/palette.json" <<JSON
 }
 JSON
 
-# Tell Quickshell to reload its QML files
+# Notify Quickshell to reload its QML files
 kill -SIGUSR1 quickshell 2>/dev/null || true
 '
 write_file "$BASE/scripts/apply_matugen.sh" "$APPLY_MATUGEN"
@@ -1197,7 +1284,7 @@ log "============================================================"
 log "Setup finished"
 log ""
 log "Next steps:"
-log "  • Log out and log back in, or start Hyprland with \"startx\"."
+log "  • Log out and log back in, or start Hyprland with \"Hyprland\"."
 log "  • The top panel, launcher (Super+Space), wallpaper selector (Super+W) and AI sidebar (Super+I) should appear."
 log "  • All UI elements use the \"SFMono Nerd Font Mono\" family."
 log "  • Volume and brightness hardware keys already show OSD pop‑ups."
